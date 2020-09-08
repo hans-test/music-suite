@@ -1759,11 +1759,23 @@ exportNote :: Asp1a -> Score Midi.Message
 -- For now we throw all of this away using 'snd'
 --
 -- Arguably these should be retought, see $minorAspect in TODO.md
-exportNote (PartT (_, ((snd . runSlideT . snd . runHarmonicT . snd . runTextT . snd . runColorT . snd . runTremoloT . snd . runStaffNumberT) -> x))) = exportNoteT x
+exportNote (PartT (p, ((snd . runSlideT . snd . runHarmonicT . snd . runTextT . snd . runColorT . snd . runTremoloT . snd . runStaffNumberT) -> x))) = exportNoteT x
   where
     exportNoteT (TechniqueT (Couple (_, x))) = exportNoteA x
     exportNoteA (ArticulationT (_, x)) = exportNoteD x
-    exportNoteD (DynamicT (d, x)) = setVelocity (dynLevel d) <$> mkMidiNote x
+    exportNoteD (DynamicT (d, x)) =
+      setVelocity (compensate p $ dynLevel d) <$> mkMidiNote x
+
+    -- TODO Hardcoding
+    --
+    -- This is to compensate for a too soft violin sound in the default
+    -- Timidity patch. This should be configurable by the user.
+    compensate :: Part -> Midi.Velocity -> Midi.Velocity
+    compensate p l
+      | view Music.Parts.instrument p ==
+        Music.Parts.violin =
+          (floor (fromIntegral l * 2 - 10 :: Double) `min` 127) `max` 30
+      | otherwise = l
 
 -- TODO move this to Music.Dynamics.Balance?
 dynLevel :: Music.Dynamics.Dynamics -> Midi.Velocity
@@ -1992,6 +2004,9 @@ mapToScore = view score . fmap (view event . first (view $ from onsetAndOffset))
 
 toStandardNotation :: (StandardNotationExportM m) => Asp -> m Work
 toStandardNotation sc' = do
+  -- TODO poor man's deepseq:
+  say "Evaluating music"
+  say $ "  Done, size " ++ (show $ length $ show $ sc')
   say "Simplifying pitches"
   -- Simplify pitch spelling
   let postPitchSimplification = Music.Score.Pitch.simplifyPitches normScore
@@ -2003,7 +2018,7 @@ toStandardNotation sc' = do
 
   -- Change aspect type as we need Semigroup to compose all simultanous notes
   -- Merge simultanous notes into chords, to simplify voice-separation
-  say "Merging overlapping notes into chords"
+  say "Merging overlapping chords"
   let postChordMerge :: [(Music.Parts.Part, Score Asp2)] = (fmap . fmap) (simultaneous . fmap asp1ToAsp2) postPartExtract
   -- postChordMerge :: [(Music.Parts.Part,Score Asp2)]
 
@@ -2070,7 +2085,7 @@ toStandardNotation sc' = do
   -- postQuantize :: [(Music.Parts.Part,[Rhythm (Maybe Asp3)])]
 
   -- Group staves, generating brackets and braces
-  say "Generate staff groups"
+  say "Generating staff groups"
   let postStaffGrouping ::
         LabelTree BracketType (Part, List0To4 [Rhythm (Maybe Asp3)]) =
           generateStaffGrouping postQuantize
